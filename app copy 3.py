@@ -30,8 +30,6 @@ if not os.path.exists(VOICES_DIR):
 if os.name == 'nt':  # Nếu chạy trên Windows (Local máy bạn)
     PIPER_EXE = os.path.join(BASE_DIR, "piper", "piper.exe")
 else:                # Nếu chạy trên Streamlit Cloud (Linux)
-    # Tự động tải hoặc dùng bản binary linux/python nếu có. 
-    # Nếu thư mục piper cục bộ có sẵn file thực thi linux, ta cấp quyền chạy.
     PIPER_EXE = os.path.join(BASE_DIR, "piper", "piper")
     if os.path.exists(PIPER_EXE):
         try: os.chmod(PIPER_EXE, 0o755) # Cấp quyền thực thi trên Linux Cloud
@@ -64,28 +62,28 @@ def save_users(users_data):
     with open(DB_FILE, "w", encoding="utf-8") as f:
         json.dump(users_data, f, ensure_ascii=False, indent=4)
 
-def get_session_output_path():
+def get_session_output_path(prefix="output_temp"):
     if "session_id" not in st.session_state:
         st.session_state.session_id = f"{int(time.time())}_{os.getpid()}"
-    return os.path.join(BASE_DIR, f"output_temp_{st.session_state.session_id}.wav")
+    return os.path.join(BASE_DIR, f"{prefix}_{st.session_state.session_id}.wav")
 
 # ================= CẤU HÌNH THÔNG TIN NẠP TIỀN & API BANK =================
 WEB_MUA_KEY = "http://localhost:8000"
-BANK_ID = "MB" 
-BANK_ACCOUNT = "05165917641234" 
-ACCOUNT_NAME = "HO MINH PHUONG" 
+BANK_ID = "vietcombank" 
+BANK_ACCOUNT = "1234567890" 
+ACCOUNT_NAME = "NGUYEN VAN A" 
 
 # Lấy an toàn từ mục Secrets cấu hình trên Cloud
 if "API_KEY_BANK" in st.secrets:
     API_KEY_BANK = st.secrets["API_KEY_BANK"]
 else:
-    API_KEY_BANK = "JGURMKIPD29F8H83OBBFJQXWS0T7IAXMKWY1BECT2NUCTS9NQUVTVQG6LDHLPH40"
+    API_KEY_BANK = "MF8X6JD9VUCRXQUSEHAXZBIBMTDOIOGE13D45QTEAIFTWRVW4LKRLYYCZ0JO7MFM"
 
 API_URL_CHECK = "https://api.sepay.vn/user/balance/history"
 
 VIP_PACKAGES = {
     "Gói 1 Tháng": {"days": 30, "price": 99000, "desc": "Sử dụng đầy đủ giọng đọc chất lượng cao, không giới hạn ký tự trong 30 ngày."},
-    "Gói 3 Tháng": {"days": 90, "price": 249000, "desc": "Tiết kiệm 15%. Sử dụng đầy đủ tính năng Premium trong 90 ngày."},
+    "Gói 3 Tháng": {"days": 90, "price": 249000, "desc": "Tiết kiệm 15%. Sử dụng đầy đủ tính năng Premium trong 90 days."},
     "Gói 1 Năm": {"days": 365, "price": 799000, "desc": "Tiết kiệm 30%. Gói VIP dài hạn tối ưu nhất trong 365 ngày."}
 }
 
@@ -127,8 +125,34 @@ def parse_srt(content):
         })
     return srt_list
 
+# --- HÀM TỰ ĐỘNG TẢI GIỌNG ĐỌC MẪU NẾU THƯ MỤC TRỐNG ---
 def get_available_voices():
-    # Quét giọng đọc trong thư mục voices/ để quản lý gọn gàng trên GitHub
+    if not os.path.exists(VOICES_DIR) or not os.path.isdir(VOICES_DIR):
+        try:
+            if os.path.exists(VOICES_DIR): os.remove(VOICES_DIR)
+            os.makedirs(VOICES_DIR)
+        except: return []
+
+    default_voice_name = "vi_VN-vivos-low.onnx"
+    default_voice_path = os.path.join(VOICES_DIR, default_voice_name)
+    default_config_path = default_voice_path + ".json"
+    
+    if not any(f.endswith('.onnx') for f in os.listdir(VOICES_DIR)):
+        with st.spinner("🚚 Đang tải cấu hình giọng đọc tiếng Việt mẫu về máy chủ..."):
+            try:
+                url_onnx = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/vi/vi_VN/vivos/low/vi_VN-vivos-low.onnx"
+                r = requests.get(url_onnx, stream=True)
+                with open(default_voice_path, 'wb') as f:
+                    for chunk in r.iter_content(chunk_size=1024):
+                        if chunk: f.write(chunk)
+                        
+                url_json = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/vi/vi_VN/vivos/low/vi_VN-vivos-low.onnx.json"
+                r_json = requests.get(url_json)
+                with open(default_config_path, 'w', encoding='utf-8') as f:
+                    f.write(r_json.text)
+            except Exception as e:
+                st.error(f"Lỗi tải giọng đọc tự động: {str(e)}")
+
     return [f for f in os.listdir(VOICES_DIR) if f.endswith('.onnx')]
 
 # --- HÀM GỌI API QUÉT LỊCH SỬ GIAO DỊCH NGÂN HÀNG ---
@@ -253,18 +277,48 @@ else:
     # ================= TAB 1: STUDIO CHUYỂN GIỌNG NÓI =================
     with main_tabs[0]:
         st.markdown("### 👥 Cài Đặt Giọng Đọc AI")
-        col_voice, col_speed = st.columns([1.5, 1])
+        col_voice, col_listen, col_speed = st.columns([1.5, 0.8, 1])
         
         with col_voice:
             voices = get_available_voices()
             selected_model = st.selectbox(
                 "Chọn Mô hình Giọng Đọc (.onnx):", 
-                options=voices if voices else ["Hãy thêm file giọng đọc .onnx vào thư mục voices/ trên GitHub"]
+                options=voices if voices else ["Đang tải mẫu giọng đọc mặc định..."]
             )
+            
+        with col_listen:
+            st.write(" ") # Căn dòng nút bấm
+            st.write(" ")
+            btn_listen = st.button("🎵 Nghe thử âm thanh", use_container_width=True)
             
         with col_speed:
             speed = st.slider("⚡ Tốc độ đọc (Speed Scale):", min_value=0.5, max_value=2.0, value=1.0, step=0.1)
             length_scale = str(1.0 / speed)
+
+        # Xử lý khi nhấn nút Nghe thử âm thanh
+        if btn_listen:
+            if not selected_model or ".onnx" not in selected_model:
+                st.error("Chưa chọn được mô hình giọng đọc để nghe thử!")
+            else:
+                with st.spinner("🔊 Đang chuẩn bị âm thanh mẫu..."):
+                    try:
+                        model_path = os.path.join(VOICES_DIR, selected_model)
+                        demo_output = get_session_output_path(prefix="demo_preview")
+                        demo_text = "Hệ thống âm thanh của Viet Voice A I đang hoạt động rất tốt."
+                        
+                        subprocess.run(
+                            [PIPER_EXE, "--model", model_path, "--length_scale", length_scale, "--output_file", demo_output],
+                            input=demo_text, text=True, encoding="utf-8", check=True,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                        )
+                        
+                        if os.path.exists(demo_output):
+                            with open(demo_output, "rb") as f:
+                                st.audio(f.read(), format="audio/wav")
+                            try: os.remove(demo_output)
+                            except: pass
+                    except Exception as e:
+                        st.error(f"Không thể phát âm thanh demo: {str(e)}")
 
         st.markdown("---")
         tab_text, tab_srt = st.tabs(["📝 Chuyển Văn Bản Thường", "🎬 Đồng Bộ Phụ Đề SRT"])
@@ -287,7 +341,6 @@ else:
                         
                         output_path = get_session_output_path()
                         
-                        # Gọi chạy Piper thông qua Subprocess (thích ứng Windows/Linux)
                         subprocess.run(
                             [PIPER_EXE, "--model", model_path, "--length_scale", length_scale, "--output_file", output_path],
                             input=input_text, text=True, encoding="utf-8", check=True,
@@ -303,7 +356,7 @@ else:
                             st.audio(audio_bytes, format="audio/wav")
                             st.download_button("💾 Tải File Audio Ra Máy", data=audio_bytes, file_name="VietVoice_Output.wav", mime="audio/wav")
                     except Exception as e:
-                        st.error(f"Lỗi khi chạy bộ chuyển đổi Piper: {str(e)}. Xin hãy kiểm tra chắc chắn file thực thi Piper Linux/Windows đã được đặt đúng chỗ.")
+                        st.error(f"Lỗi khi chạy bộ chuyển đổi Piper: {str(e)}.")
 
         with tab_srt:
             st.subheader("Tự động đồng bộ và co dãn giọng đọc theo dòng thời gian SRT")
