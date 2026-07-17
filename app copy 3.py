@@ -18,11 +18,24 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- ĐƯỜNG DẪN HỆ THỐNG ---
+# --- ĐƯỜNG DẪN HỆ THỐNG (TỰ ĐỘNG THÍCH ỨNG WINDOWS / LINUX CLOUD) ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PIPER_EXE = os.path.join(BASE_DIR, "piper", "piper")
-if os.name == 'nt':  
-    PIPER_EXE += ".exe"
+
+# Tạo thư mục chứa giọng đọc nếu chưa có
+VOICES_DIR = os.path.join(BASE_DIR, "voices")
+if not os.path.exists(VOICES_DIR):
+    os.makedirs(VOICES_DIR)
+
+# Kiểm tra hệ điều hành để cấu hình lệnh chạy Piper
+if os.name == 'nt':  # Nếu chạy trên Windows (Local máy bạn)
+    PIPER_EXE = os.path.join(BASE_DIR, "piper", "piper.exe")
+else:                # Nếu chạy trên Streamlit Cloud (Linux)
+    # Tự động tải hoặc dùng bản binary linux/python nếu có. 
+    # Nếu thư mục piper cục bộ có sẵn file thực thi linux, ta cấp quyền chạy.
+    PIPER_EXE = os.path.join(BASE_DIR, "piper", "piper")
+    if os.path.exists(PIPER_EXE):
+        try: os.chmod(PIPER_EXE, 0o755) # Cấp quyền thực thi trên Linux Cloud
+        except: pass
 
 # File dữ liệu lưu thông tin tài khoản ngay trên Web
 DB_FILE = os.path.join(BASE_DIR, "users_db.json")
@@ -30,7 +43,6 @@ DB_FILE = os.path.join(BASE_DIR, "users_db.json")
 # Tự động khởi tạo file cơ sở dữ liệu nếu chưa có
 if not os.path.exists(DB_FILE):
     with open(DB_FILE, "w", encoding="utf-8") as f:
-        # Tạo sẵn tài khoản quản trị admin/admin123
         json.dump({
             "admin": {
                 "password": "admin123",
@@ -63,13 +75,17 @@ BANK_ID = "MB"
 BANK_ACCOUNT = "05165917641234" 
 ACCOUNT_NAME = "HO MINH PHUONG" 
 
-# Nhập token API từ cổng dịch vụ quét biến động số dư của bạn (Ví dụ: Sepay, Casso,...)
-API_KEY_BANK = "JGURMKIPD29F8H83OBBFJQXWS0T7IAXMKWY1BECT2NUCTS9NQUVTVQG6LDHLPH40"  
-API_URL_CHECK = "https://api.sepay.vn/user/balance/history" # Endpoint kiểm tra lịch sử giao dịch
+# Lấy an toàn từ mục Secrets cấu hình trên Cloud
+if "API_KEY_BANK" in st.secrets:
+    API_KEY_BANK = st.secrets["API_KEY_BANK"]
+else:
+    API_KEY_BANK = "JGURMKIPD29F8H83OBBFJQXWS0T7IAXMKWY1BECT2NUCTS9NQUVTVQG6LDHLPH40"
+
+API_URL_CHECK = "https://api.sepay.vn/user/balance/history"
 
 VIP_PACKAGES = {
-    "Gói 1 Tháng": {"days": 30, "price": 50000, "desc": "Sử dụng đầy đủ giọng đọc chất lượng cao, không giới hạn ký tự trong 30 ngày."},
-    "Gói 3 Tháng": {"days": 90, "price": 100000, "desc": "Tiết kiệm 15%. Sử dụng đầy đủ tính năng Premium trong 90 ngày."},
+    "Gói 1 Tháng": {"days": 30, "price": 99000, "desc": "Sử dụng đầy đủ giọng đọc chất lượng cao, không giới hạn ký tự trong 30 ngày."},
+    "Gói 3 Tháng": {"days": 90, "price": 249000, "desc": "Tiết kiệm 15%. Sử dụng đầy đủ tính năng Premium trong 90 ngày."},
     "Gói 1 Năm": {"days": 365, "price": 799000, "desc": "Tiết kiệm 30%. Gói VIP dài hạn tối ưu nhất trong 365 ngày."}
 }
 
@@ -112,44 +128,36 @@ def parse_srt(content):
     return srt_list
 
 def get_available_voices():
-    return [f for f in os.listdir(BASE_DIR) if f.endswith('.onnx')]
+    # Quét giọng đọc trong thư mục voices/ để quản lý gọn gàng trên GitHub
+    return [f for f in os.listdir(VOICES_DIR) if f.endswith('.onnx')]
 
+# --- HÀM GỌI API QUÉT LỊCH SỬ GIAO DỊCH NGÂN HÀNG ---
 def check_payment_via_api(expected_content, expected_amount):
-    """
-    Gọi tới cổng API để duyệt tìm giao dịch.
-    Đã được tối ưu hóa để ẩn lỗi hệ thống và hiển thị cảnh báo thân thiện.
-    """
     try:
         headers = {
             "Authorization": f"Bearer {API_KEY_BANK}",
             "Content-Type": "application/json"
         }
-        # Thực hiện gọi API với timeout ngắn (5 giây) để tránh treo app
         response = requests.get(API_URL_CHECK, headers=headers, timeout=5)
-        
         if response.status_code == 200:
             data = response.json()
             transactions = data.get("transactions", []) or data.get("data", [])
-            
             for tx in transactions:
                 tx_content = str(tx.get("transaction_content", "") or tx.get("description", "")).lower()
                 tx_amount = float(tx.get("amount", 0) or tx.get("creditAmount", 0))
-                
                 if expected_content.lower() in tx_content and tx_amount >= expected_amount:
                     return True
         return False
     except requests.exceptions.ConnectionError:
-        # Bắt riêng lỗi mất mạng/lỗi DNS và đưa ra cảnh báo đẹp đẽ
-        st.warning("⚠️ Không thể kết nối tới máy chủ ngân hàng. Vui lòng kiểm tra lại kết nối Internet của máy chủ hoặc thử lại sau ít phút!")
+        st.warning("⚠️ Không thể kết nối tới máy chủ ngân hàng kiểm tra giao dịch. Vui lòng thử lại sau giây lát!")
         return False
-    except Exception as e:
-        # Các lỗi vụn vặt khác
-        return Fals
+    except Exception:
+        return False
+
 # ================= GIAO DIỆN CHƯA ĐĂNG NHẬP =================
 if not st.session_state.logged_in:
     tab_login, tab_register = st.tabs(["🔐 Đăng Nhập", "📝 Đăng Ký Tài Khoản"])
     
-    # --- Tab Đăng Nhập ---
     with tab_login:
         st.subheader("ĐĂNG NHẬP HỆ THỐNG")
         login_user = st.text_input("Tên đăng nhập", key="login_user_input").strip()
@@ -178,7 +186,6 @@ if not st.session_state.logged_in:
                 else:
                     st.error("Tên đăng nhập hoặc mật khẩu không đúng!")
 
-    # --- Tab Đăng Ký ---
     with tab_register:
         st.subheader("TẠO TÀI KHOẢN MỚI")
         reg_user = st.text_input("Tên đăng nhập mới").strip()
@@ -195,9 +202,7 @@ if not st.session_state.logged_in:
                 if reg_user in users:
                     st.error("Tên đăng nhập đã tồn tại trên hệ thống!")
                 else:
-                    # Tạo hạn dùng thử 1 ngày
                     trial_expire = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
-                    
                     users[reg_user] = {
                         "password": reg_pass,
                         "expire_date": trial_expire,
@@ -205,7 +210,6 @@ if not st.session_state.logged_in:
                         "is_admin": False
                     }
                     save_users(users)
-                    
                     st.success("🎉 Đăng ký thành công! Đang tự động đăng nhập...")
                     
                     st.session_state.logged_in = True
@@ -232,7 +236,6 @@ else:
             st.markdown("⭐ **Cấp bậc:** `Học viên / Trial` ⏱️")
             
         st.markdown("---")
-        
         if st.button("Đăng Xuất 🚪", use_container_width=True):
             st.session_state.logged_in = False
             st.session_state.username = None
@@ -256,7 +259,7 @@ else:
             voices = get_available_voices()
             selected_model = st.selectbox(
                 "Chọn Mô hình Giọng Đọc (.onnx):", 
-                options=voices if voices else ["Không tìm thấy mô hình .onnx nào trong thư mục ứng dụng"]
+                options=voices if voices else ["Hãy thêm file giọng đọc .onnx vào thư mục voices/ trên GitHub"]
             )
             
         with col_speed:
@@ -273,18 +276,18 @@ else:
             if st.button("🔊 Phát Sinh Giọng Đọc", type="primary"):
                 if not input_text.strip():
                     st.warning("Vui lòng nhập văn bản!")
-                elif not selected_model or "Không tìm thấy" in selected_model:
-                    st.error("Vui lòng tải file giọng đọc .onnx vào thư mục ứng dụng!")
+                elif not selected_model or ".onnx" not in selected_model:
+                    st.error("Chưa chọn được mô hình giọng đọc hợp lệ!")
                 else:
-                    progress_text = "Đang sinh giọng đọc..."
-                    my_bar = st.progress(0, text=progress_text)
-                    
+                    my_bar = st.progress(0, text="Đang khởi chạy tiến trình...")
                     try:
                         start_time = time.time()
-                        model_path = os.path.join(BASE_DIR, selected_model)
+                        model_path = os.path.join(VOICES_DIR, selected_model)
                         my_bar.progress(30, text="Đang xử lý mô hình Piper AI...")
                         
                         output_path = get_session_output_path()
+                        
+                        # Gọi chạy Piper thông qua Subprocess (thích ứng Windows/Linux)
                         subprocess.run(
                             [PIPER_EXE, "--model", model_path, "--length_scale", length_scale, "--output_file", output_path],
                             input=input_text, text=True, encoding="utf-8", check=True,
@@ -292,8 +295,7 @@ else:
                         )
                         
                         my_bar.progress(100, text="Hoàn tất!")
-                        elapsed = time.time() - start_time
-                        st.success(f"Thành công! Thời gian xử lý: {elapsed:.2f} giây.")
+                        st.success(f"Thành công! Thời gian xử lý: {time.time() - start_time:.2f} giây.")
                         
                         if os.path.exists(output_path):
                             with open(output_path, "rb") as f:
@@ -301,7 +303,7 @@ else:
                             st.audio(audio_bytes, format="audio/wav")
                             st.download_button("💾 Tải File Audio Ra Máy", data=audio_bytes, file_name="VietVoice_Output.wav", mime="audio/wav")
                     except Exception as e:
-                        st.error(f"Đã xảy ra lỗi khi chạy Piper: {str(e)}")
+                        st.error(f"Lỗi khi chạy bộ chuyển đổi Piper: {str(e)}. Xin hãy kiểm tra chắc chắn file thực thi Piper Linux/Windows đã được đặt đúng chỗ.")
 
         with tab_srt:
             st.subheader("Tự động đồng bộ và co dãn giọng đọc theo dòng thời gian SRT")
@@ -310,18 +312,18 @@ else:
             if uploaded_file is not None:
                 stringio = uploaded_file.getvalue().decode("utf-8")
                 st.session_state.srt_data = parse_srt(stringio)
-                st.info(f"Đã nạp thành công `{len(st.session_state.srt_data)}` phân đoạn phụ đề từ file.")
+                st.info(f"Đã nạp thành công `{len(st.session_state.srt_data)}` phân đoạn phụ đề.")
             
             if st.button("⚡ Tạo Khớp Thời Gian & Phát Sinh File", type="primary", key="btn_gen_srt_web"):
                 if not st.session_state.srt_data:
                     st.warning("Vui lòng tải lên file phụ đề .SRT trước!")
-                elif not selected_model or "Không tìm thấy" in selected_model:
-                    st.error("Chưa chọn được mô hình giọng đọc .onnx!")
+                elif not selected_model or ".onnx" not in selected_model:
+                    st.error("Chưa chọn được mô hình giọng đọc!")
                 else:
                     progress_bar = st.progress(0, text="Bắt đầu phân tích...")
                     try:
                         start_time = time.time()
-                        model_path = os.path.join(BASE_DIR, selected_model)
+                        model_path = os.path.join(VOICES_DIR, selected_model)
                         
                         total_duration_ms = st.session_state.srt_data[-1]["end"]
                         combined_audio = AudioSegment.silent(duration=total_duration_ms)
@@ -350,11 +352,9 @@ else:
                             if os.path.exists(temp_segment_wav):
                                 seg_audio = AudioSegment.from_wav(temp_segment_wav)
                                 seg_len = len(seg_audio)
-                                
                                 if seg_len > duration_limit and duration_limit > 0:
                                     speed_ratio = seg_len / duration_limit
                                     seg_audio = seg_audio.speedup(playback_speed=speed_ratio)
-                                
                                 combined_audio = combined_audio.overlay(seg_audio, position=start_ms)
                                 try: os.remove(temp_segment_wav)
                                 except: pass
@@ -417,7 +417,6 @@ else:
                 *   **Nội dung chuyển khoản:** `{transfer_content}`
                 """)
                 
-                # --- NÚT BẤM TỰ ĐỘNG KIỂM TRA LỊCH SỬ GIAO DỊCH QUA API ---
                 if st.button("Xác nhận đã chuyển tiền 🔔 (Tự động kích hoạt)", use_container_width=True, type="primary"):
                     with st.spinner("Đang truy vấn lịch sử ngân hàng để xác nhận giao dịch..."):
                         is_paid = check_payment_via_api(expected_content=transfer_content, expected_amount=pkg_info['price'])
@@ -427,7 +426,6 @@ else:
                             current_user = st.session_state.username
                             
                             if current_user in users:
-                                # Lấy mốc thời gian hạn dùng hiện tại
                                 try:
                                     current_expire = datetime.strptime(users[current_user]["expire_date"], "%Y-%m-%d %H:%M:%S")
                                 except:
@@ -436,16 +434,13 @@ else:
                                 if current_expire < datetime.now():
                                     current_expire = datetime.now()
                                     
-                                # Cộng dồn số ngày sử dụng
                                 days_to_add = pkg_info["days"]
                                 new_expire = (current_expire + timedelta(days=days_to_add)).strftime("%Y-%m-%d %H:%M:%S")
                                 
-                                # Cập nhật DB cục bộ JSON
                                 users[current_user]["expire_date"] = new_expire
                                 users[current_user]["is_vip"] = True
                                 save_users(users)
                                 
-                                # Cập nhật trực tiếp lên Client UI State
                                 st.session_state.expire_date = new_expire
                                 st.session_state.is_vip = True
                                 
@@ -460,7 +455,6 @@ else:
     if st.session_state.is_admin:
         with main_tabs[2]:
             st.subheader("⚙️ Bảng Quản Trị Hệ Thống Web - Quản Lý File JSON")
-            
             col_ad1, col_ad2 = st.columns(2)
             
             with col_ad1:
